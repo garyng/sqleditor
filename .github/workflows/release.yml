@@ -47,4 +47,4 @@ jobs:
       - name: Upload to GitHub Release
         uses: softprops/action-gh-release@v1
         with:
-          file: ${{ env.PROJECT_ARTIFACTS_DIR }}/*.*
+          files: ${{ env.PROJECT_ARTIFACTS_DIR }}/*.*
