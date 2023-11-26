@@ -10,7 +10,7 @@ env:
   PROJECT_ARTIFACTS_DIR: ./.dist
 
 jobs:
-  release:
+  build:
     runs-on: windows-latest
     steps:
       - name: Checkout
@@ -31,3 +31,20 @@ jobs:
         with:
           name: NuGet packages
           path: ${{ env.PROJECT_ARTIFACTS_DIR }}
+
+  publish:
+    runs-on: windows-latest
+    needs: build
+    if: ${{ github.event.release.id }}
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v3
+        with:
+          name: NuGet packages
+          path: ${{ env.PROJECT_ARTIFACTS_DIR }}
+
+      - name: Upload to GitHub Release
+        uses: xresloader/upload-to-github-release@v1
+        with:
+          file: ${{ env.PROJECT_ARTIFACTS_DIR }}/*.*
+          tags: true
