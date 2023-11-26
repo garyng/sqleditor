@@ -55,4 +55,4 @@ jobs:
           dotnet-version: 6
 
       - name: Publish to nuget.org
-        run: dotnet nuget push ${{ env.PROJECT_ARTIFACTS_DIR }}/*.nupkg -k ${{ secrets.NUGET_ORG_API_KEY }} -s https://api.nuget.org/v3/index.json
+        run: dotnet nuget push "${{ env.PROJECT_ARTIFACTS_DIR }}/*.nupkg" -k ${{ secrets.NUGET_ORG_API_KEY }} -s https://api.nuget.org/v3/index.json
