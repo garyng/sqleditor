@@ -1,0 +1,13 @@
+name: release
+
+on:
+  workflow_dispatch:
+  release:
+    types: [published]
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - run: |
+          echo "hi"
