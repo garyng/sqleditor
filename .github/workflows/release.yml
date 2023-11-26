@@ -43,8 +43,8 @@ jobs:
           name: NuGet packages
           path: ${{ env.PROJECT_ARTIFACTS_DIR }}
 
+      # note: Settings > Actions > General > Workflow permissions > allow 'Read and write permissions'
       - name: Upload to GitHub Release
-        uses: xresloader/upload-to-github-release@v1
+        uses: softprops/action-gh-release@v1
         with:
           file: ${{ env.PROJECT_ARTIFACTS_DIR }}/*.*
-          tags: true
