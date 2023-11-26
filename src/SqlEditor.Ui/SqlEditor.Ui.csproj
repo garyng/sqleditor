@@ -10,7 +10,7 @@
 
 		<PackAsTool>true</PackAsTool>
 		<ToolCommandName>gsqle</ToolCommandName>
-		<PackageOutputPath>$(MSBuildProjectDirectory)/../../dist/</PackageOutputPath>
+		<PackageOutputPath>$(MSBuildProjectDirectory)/../../.dist/</PackageOutputPath>
 		<GeneratePackageOnBuild>true</GeneratePackageOnBuild>
 
 		<PackageId>GaryNg.SqlEditor</PackageId>
@@ -19,8 +19,9 @@
 		<Company>GaryNg</Company>
 		<Product>SqlEditor</Product>
 		<Description>
-			This is a simple tool for working with sql databases.
+			A simple tool for working with sql databases.
 		</Description>
+		<PackageProjectUrl>https://github.com/garyng/sqleditor</PackageProjectUrl>
 	</PropertyGroup>
 
 </Project>
