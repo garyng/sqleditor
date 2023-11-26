@@ -5,9 +5,29 @@ on:
   release:
     types: [published]
 
+env:
+  PROJECT_SOURCE_DIR: ./src
+  PROJECT_ARTIFACTS_DIR: ./.dist
+
 jobs:
   release:
     runs-on: windows-latest
     steps:
-      - run: |
-          echo "hi"
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Setup dotnet
+        uses: actions/setup-dotnet@v3
+        with:
+          dotnet-version: 6
+      
+      - name: Build and pack
+        run: dotnet build $PROJECT_SOURCE_DIR --configuration Release
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: NuGet packages
+          path: ${{ env.PROJECT_ARTIFACTS_DIR }}
