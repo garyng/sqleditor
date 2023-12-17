@@ -1,15 +1,15 @@
-using System.Data;
-using System.Data.Common;
-using System.Runtime.CompilerServices;
 using Dapper;
 using FakeItEasy;
+using FluentAssertions;
 using Microsoft.Data.SqlClient;
-using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Design;
-using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.EntityFrameworkCore.Scaffolding;
 using Microsoft.EntityFrameworkCore.SqlServer.Design.Internal;
 using Microsoft.Extensions.DependencyInjection;
+using NUnit.Framework.Internal;
+using System.Data;
+using System.Data.Common;
+using System.Reflection;
 
 namespace SqlEditor.Tests;
 
@@ -72,7 +72,8 @@ public class Tests
 				x.TABLE_CATALOG,
 				x.TABLE_SCHEMA,
 				x.TABLE_NAME,
-				x.COLUMN_NAME
+				x.COLUMN_NAME,
+				x.DATA_TYPE
 			});
 
 		var results2 = await connection.QueryAsync("select * from [dbo].[Table]");
@@ -82,11 +83,32 @@ public class Tests
 			{
 				// note: this will fail if the value is null
 				y.Key,
-				y.Value,
+				Value = y.Value is DateTimeOffset ? "this is datetimeoffset" : y.Value,
 				Type = y.Value.GetType()
 			}))
 			.ToList();
 	}
+
+	[Test]
+	public async Task CheckHowDapperDeserializeToObject()
+	{
+		var connectionString = "Data Source=localhost,21433;User ID=sa;Password=Pass@word123!;Initial Catalog=Tests";
+		using DbConnection connection = new SqlConnection(connectionString);
+
+		var results = (await connection.QueryAsync<TestTable>("select * from [dbo].[Table]")).AsList();
+
+		// note: this is very complex... there is dynamic il generation for deserializer
+	}
+}
+
+public class TestTable
+{
+	public string Id { get; set; }
+	public string NChar10 { get; set; }
+	public string NVarcharMax { get; set; }
+	public DateTimeOffset DateTimeOffset7 { get; set; }
+	public decimal Decimal18 { get; set; }
+	public Guid Guid { get; set; }
 }
 
 public static class DapperExtensions
@@ -95,5 +117,222 @@ public static class DapperExtensions
 	{
 		var result = await cnn.QueryAsync(sql, param, transaction, commandTimeout, commandType);
 		return result.Select<dynamic, T>(x => map(x));
+	}
+}
+
+public class Playground2
+{
+	private string _connectionString;
+	private SqlConnection _connection;
+
+	[OneTimeSetUp]
+	public async Task TestBaseOneTimeSetUp()
+	{
+		// todo: extract out connection string
+		_connectionString = "Data Source=localhost,21433;User ID=sa;Password=Pass@word123!;Initial Catalog=Tests";
+		await TestConnection(_connectionString);
+	}
+
+	private async Task TestConnection(string connectionString, CancellationToken cancellationToken = default)
+	{
+		try
+		{
+			await using var connection = new SqlConnection(connectionString);
+			await connection.OpenAsync(cancellationToken);
+			var command = new SqlCommand("select 1", connection);
+			var result = await command.ExecuteScalarAsync(cancellationToken);
+			result.Should().Be(1);
+		}
+		catch (Exception)
+		{
+			Assert.Fail();
+		}
+	}
+
+	[SetUp]
+	public async Task TestBaseSetUp()
+	{
+		_connection = new SqlConnection(_connectionString);
+		await _connection.OpenAsync();
+		// todo: create test db and table
+	}
+
+	[TearDown]
+	public async Task TestBaseTearDown()
+	{
+		await _connection.CloseAsync();
+	}
+
+	public record Dummy;
+
+	[Test]
+	public async Task PrintMemberNamesInMapper()
+	{
+		Dapper.SqlMapper.SetTypeMap(typeof(Dummy), new NoOpTypeMap<Dummy>());
+
+		var result = await _connection.QueryAsync<Dummy>(
+			"""
+			select *
+			from [dbo].[Table]
+			where Id = 4
+			""");
+
+		// todo: get header row
+		// todo: get data row
+		// todo: get header row even when there is no results
+	}
+
+	public record Schema(string ColumnName, Type DataType, bool AllowDBNull, Type ProviderSpecificDataType);
+
+	[Test]
+	public async Task GetSchemaAndData()
+	{
+		await using var reader = await _connection.ExecuteReaderAsync(
+			"""
+			select *
+			from [dbo].[Table]
+			""");
+
+		// SQL-CLR type mapping: https://learn.microsoft.com/en-us/dotnet/framework/data/adonet/sql/linq/sql-clr-type-mapping
+		var schema = (await reader.GetSchemaTableAsync())
+			.AsEnumerable()
+			.Select(x => new Schema(
+				x.Field<string>(nameof(Schema.ColumnName))!,
+				x.Field<Type>(nameof(Schema.DataType))!,
+				x.Field<bool>(nameof(Schema.AllowDBNull)),
+				x.Field<Type>(nameof(Schema.ProviderSpecificDataType))!
+			));
+		var parser = reader.GetRowParser<dynamic>();
+		
+		async IAsyncEnumerable<IDictionary<string, object>> ReadAll()
+		{
+			while (await reader.ReadAsync())
+			{
+				yield return parser(reader);
+			}
+		}
+
+		var data = await ReadAll().ToListAsync();
+		data.Should()
+			.NotBeEmpty();
+	}
+}
+
+public sealed class NoOpTypeMap<T> : FallbackTypeMapper
+{
+	public NoOpTypeMap() : base(new SqlMapper.ITypeMap[]
+	{
+		new NoOpTypeMap(),
+		new DefaultTypeMap(typeof(T))
+	})
+	{
+	}
+}
+
+public class NoOpTypeMap : SqlMapper.ITypeMap
+{
+	public ConstructorInfo? FindConstructor(string[] names, Type[] types)
+	{
+		return null;
+	}
+
+	public ConstructorInfo? FindExplicitConstructor()
+	{
+		return null;
+	}
+
+	public SqlMapper.IMemberMap? GetConstructorParameter(ConstructorInfo constructor, string columnName)
+	{
+		return null;
+	}
+
+	public SqlMapper.IMemberMap? GetMember(string columnName)
+	{
+		Console.WriteLine(columnName);
+		return null;
+	}
+}
+
+public class FallbackTypeMapper : SqlMapper.ITypeMap
+{
+	// from:
+	// - https://github.com/DapperLib/Dapper/issues/360#issuecomment-151469721
+	// - https://stackoverflow.com/a/12615036
+	// - https://gist.github.com/kalebpederson/5460509
+
+	private readonly IEnumerable<SqlMapper.ITypeMap> _mappers;
+
+	public FallbackTypeMapper(IEnumerable<SqlMapper.ITypeMap> mappers)
+	{
+		_mappers = mappers;
+	}
+
+
+	public ConstructorInfo? FindConstructor(string[] names, Type[] types)
+	{
+		foreach (var mapper in _mappers)
+		{
+			try
+			{
+				var result = mapper.FindConstructor(names, types);
+				if (result is not null)
+				{
+					return result;
+				}
+			}
+			catch (NotImplementedException)
+			{
+			}
+		}
+
+		return null;
+	}
+
+	public SqlMapper.IMemberMap? GetConstructorParameter(ConstructorInfo constructor, string columnName)
+	{
+		foreach (var mapper in _mappers)
+		{
+			try
+			{
+				var result = mapper.GetConstructorParameter(constructor, columnName);
+				if (result != null)
+				{
+					return result;
+				}
+			}
+			catch (NotImplementedException)
+			{
+			}
+		}
+
+		return null;
+	}
+
+	public SqlMapper.IMemberMap? GetMember(string columnName)
+	{
+		foreach (var mapper in _mappers)
+		{
+			try
+			{
+				var result = mapper.GetMember(columnName);
+				if (result != null)
+				{
+					return result;
+				}
+			}
+			catch (NotImplementedException)
+			{
+			}
+		}
+
+		return null;
+	}
+
+
+	public ConstructorInfo? FindExplicitConstructor()
+	{
+		return _mappers
+			.Select(mapper => mapper.FindExplicitConstructor())
+			.FirstOrDefault(result => result != null);
 	}
 }
