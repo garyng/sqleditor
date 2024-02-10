@@ -1,4 +1,5 @@
-﻿using Microsoft.Extensions.Hosting;
+﻿using System.Collections;
+using Microsoft.Extensions.Hosting;
 using System.Diagnostics;
 using System.Numerics;
 using System.Reflection;
@@ -8,6 +9,7 @@ using Veldrid;
 using Veldrid.Sdl2;
 using Veldrid.StartupUtilities;
 using Microsoft.Extensions.DependencyInjection;
+using static SqlEditor.Ui.MainView;
 
 namespace SqlEditor.Ui;
 
@@ -27,12 +29,12 @@ public class Program
 		var host = Host.CreateDefaultBuilder(args)
 			.ConfigureServices(s =>
 			{
-
+				s.AddSingleton<MainView>();
 			})
 			.Build();
 
 		var lifetime = host.Services.GetRequiredService<IHostApplicationLifetime>();
-
+		var mainView = host.Services.GetRequiredService<MainView>();
 
 		await host.StartAsync();
 
@@ -40,26 +42,159 @@ public class Program
 			new WindowCreateInfo(50, 50, 1280, 720, WindowState.Normal, "sqleditor"),
 			new Vector4(0.45f, 0.55f, 0.6f, 1f),
 			null, // File.Exists(config.FontTtfPath) ? new(config.FontTtfPath, config.FontSize) : null
-			Render
+			_ => mainView.Render()
 		));
 
 		await window.Run(lifetime.ApplicationStopping);
 
 		await host.StopAsync();
 	}
+}
 
-	private static bool _showDemoWindow = true;
+public interface IView
+{
+	Task Render();
+}
 
-	public static async Task Render(double deltaTime)
+public class MainView : IView
+{
+	private bool _showDemoWindow = true;
+
+	public MainView()
+	{
+		_rowsEnumerable = Generate();
+		_rowsCachedEnumerable = new CachedEnumerable<Row>(Generate());
+		_rowsList = Generate().Take(1000).ToList();
+	}
+
+	public record Row(int Idx, Guid Id, string Timestamp)
+	{
+	}
+
+	private IEnumerable<Row> Generate()
+	{
+		var i = 0;
+		while (true)
+		{
+			yield return new(i, Guid.NewGuid(), DateTime.Now.ToString("o"));
+			i++;
+		}
+	}
+
+	private int _page = 0;
+	private IEnumerable<Row> _rowsEnumerable;
+	private IEnumerable<Row> _rowsCachedEnumerable;
+	private IList<Row> _rowsList;
+
+	public class CachedEnumerable<T> : IEnumerable<T>, IDisposable
+	{
+		private readonly IEnumerator<T> enumerator;
+		private readonly List<T> cache = new List<T>();
+
+		public CachedEnumerable(IEnumerable<T> enumerable) : this(enumerable.GetEnumerator()) { }
+
+		public CachedEnumerable(IEnumerator<T> enumerator)
+			=> this.enumerator = enumerator ?? throw new ArgumentNullException(nameof(enumerator));
+
+		public IEnumerator<T> GetEnumerator()
+		{
+			int index = 0;
+			while (true)
+			{
+				if (index < cache.Count)
+				{
+					yield return cache[index];
+					index++;
+				}
+				else if (enumerator.MoveNext())
+					cache.Add(enumerator.Current);
+				else
+					yield break;
+			}
+		}
+
+		public void Dispose() => enumerator.Dispose();
+
+		IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
+	}
+
+	public async Task Render()
 	{
 		var dockId = ImGui.DockSpaceOverViewport(ImGui.GetMainViewport(), ImGuiDockNodeFlags.AutoHideTabBar | ImGuiDockNodeFlags.NoDockingSplit);
+		
 		{
 			ImGui.SetNextWindowDockID(dockId);
 			// disable scrollbar because weirdly the child is slightly bigger than the viewport
+			// todo: is this still required?
 			ImGui.Begin("Main", ImGuiWindowFlags.NoTitleBar | ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse | ImGuiWindowFlags.NoResize);
 
 			if (ImGui.BeginTabBar("main"))
 			{
+				if (ImGui.BeginTabItem("Query"))
+				{
+					ImGui.SeparatorText("start of table");
+
+					var outerSize = new Vector2(0, ImGui.GetTextLineHeightWithSpacing() * 8);
+					if (ImGui.BeginTable("items", 3, ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg
+							| ImGuiTableFlags.Resizable
+							| ImGuiTableFlags.ScrollY, outerSize))
+					{
+						ImGui.TableSetupScrollFreeze(0, 1);
+						ImGui.TableSetupColumn("Idx");
+						ImGui.TableSetupColumn("Id");
+						ImGui.TableSetupColumn("Timestamp");
+						ImGui.TableHeadersRow();
+
+						ImGuiListClipperPtr ptr;
+						unsafe
+						{
+							var clipper = new ImGuiListClipper();
+							ptr = new ImGuiListClipperPtr(&clipper);
+						}
+						ptr.Begin(1000);
+
+						while (ptr.Step())
+						{
+							for (int row = ptr.DisplayStart; row < ptr.DisplayEnd; row++)
+							{
+								//var current = _rowsEnumerable.ElementAt(row);
+								//var current = _rowsList.ElementAt(row);
+								var current = _rowsCachedEnumerable.ElementAt(row);
+
+								ImGui.TableNextRow();
+
+								ImGui.TableNextColumn();
+								ImGui.Text(current.Idx.ToString());
+
+								ImGui.TableNextColumn();
+								ImGui.Text(current.Id.ToString());
+
+								ImGui.TableNextColumn();
+								ImGui.Text(current.Timestamp);
+							}
+						}
+
+						ImGui.EndTable();
+
+						if (ImGui.Button("<"))
+						{
+							_page = Math.Min(0, _page - 1);
+						}
+						ImGui.SameLine();
+						if (ImGui.Button(">"))
+						{
+							_page++;
+						}
+						ImGui.SameLine();
+						ImGui.Text($"{_page}");
+					}
+
+					ImGui.SeparatorText("end of table");
+
+					// todo: how to render large data in table?
+
+					ImGui.EndTabItem();
+				}
 				ImGui.EndTabBar();
 			}
 
