@@ -86,6 +86,7 @@ public class MainView : IView
 	private IEnumerable<Row> _rowsCachedEnumerable;
 	private IList<Row> _rowsList;
 
+	// ref: https://stackoverflow.com/a/62578573
 	public class CachedEnumerable<T> : IEnumerable<T>, IDisposable
 	{
 		private readonly IEnumerator<T> enumerator;
@@ -107,7 +108,9 @@ public class MainView : IView
 					index++;
 				}
 				else if (enumerator.MoveNext())
+				{
 					cache.Add(enumerator.Current);
+				}
 				else
 					yield break;
 			}
