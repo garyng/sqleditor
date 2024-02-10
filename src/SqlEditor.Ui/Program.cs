@@ -1,15 +1,14 @@
-﻿using System.Collections;
+﻿using ImGuiNET;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using System.Collections;
 using System.Diagnostics;
 using System.Numerics;
 using System.Reflection;
 using System.Runtime.CompilerServices;
-using ImGuiNET;
 using Veldrid;
 using Veldrid.Sdl2;
 using Veldrid.StartupUtilities;
-using Microsoft.Extensions.DependencyInjection;
-using static SqlEditor.Ui.MainView;
 
 namespace SqlEditor.Ui;
 
@@ -62,9 +61,11 @@ public class MainView : IView
 
 	public MainView()
 	{
-		_rowsEnumerable = Generate();
-		_rowsCachedEnumerable = new CachedEnumerable<Row>(Generate());
-		_rowsList = Generate().Take(1000).ToList();
+		// refs: 
+		// - https://stackoverflow.com/questions/1537043/caching-ienumerable
+		// - https://stackoverflow.com/questions/12427097/is-there-an-ienumerable-implementation-that-only-iterates-over-its-source-e-g
+		// - https://stackoverflow.com/questions/58541336/thread-safe-cached-enumerator-lock-with-yield
+		_rows = Generate().Memoize();
 	}
 
 	public record Row(int Idx, Guid Id, string Timestamp)
@@ -82,44 +83,7 @@ public class MainView : IView
 	}
 
 	private int _page = 0;
-	private IEnumerable<Row> _rowsEnumerable;
-	private IEnumerable<Row> _rowsCachedEnumerable;
-	private IList<Row> _rowsList;
-
-	// ref: https://stackoverflow.com/a/62578573
-	public class CachedEnumerable<T> : IEnumerable<T>, IDisposable
-	{
-		private readonly IEnumerator<T> enumerator;
-		private readonly List<T> cache = new List<T>();
-
-		public CachedEnumerable(IEnumerable<T> enumerable) : this(enumerable.GetEnumerator()) { }
-
-		public CachedEnumerable(IEnumerator<T> enumerator)
-			=> this.enumerator = enumerator ?? throw new ArgumentNullException(nameof(enumerator));
-
-		public IEnumerator<T> GetEnumerator()
-		{
-			int index = 0;
-			while (true)
-			{
-				if (index < cache.Count)
-				{
-					yield return cache[index];
-					index++;
-				}
-				else if (enumerator.MoveNext())
-				{
-					cache.Add(enumerator.Current);
-				}
-				else
-					yield break;
-			}
-		}
-
-		public void Dispose() => enumerator.Dispose();
-
-		IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
-	}
+	private IEnumerable<Row> _rows;
 
 	public async Task Render()
 	{
@@ -160,9 +124,7 @@ public class MainView : IView
 						{
 							for (int row = ptr.DisplayStart; row < ptr.DisplayEnd; row++)
 							{
-								//var current = _rowsEnumerable.ElementAt(row);
-								//var current = _rowsList.ElementAt(row);
-								var current = _rowsCachedEnumerable.ElementAt(row);
+								var current = _rows.ElementAt(row);
 
 								ImGui.TableNextRow();
 
