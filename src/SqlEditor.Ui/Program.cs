@@ -187,58 +187,28 @@ public class MainView : IView
 
 	public MainView()
 	{
-		// _rows = Generate().Memoize();
-		_rows = new MemoizedBuffer<Row>(Generate().GetEnumerator());
 		_table = GenerateTable();
 	}
 
-	public record Column(object ObjectData)
-	{
-		public bool IsSelected;
-	}
-
-	public record Column<T>(T Data) : Column(Data)
-	{
-		public static implicit operator Column<T>(T data) => new(data);
-		public override string ToString() => Data.ToString();
-	}
-
-	public record Row(Column<int> Idx, Column<Guid> Id, Column<string> Timestamp)
-	{
-		public bool HasSelection => Idx.IsSelected || Id.IsSelected || Timestamp.IsSelected;
-		public List<Column> Columns => new() { Idx, Id, Timestamp };
-	}
-
-
-
 	public record Header(string Name);
-	public record Column2(object? Data)
+	public record Column(object? Data)
 	{
 		public bool IsSelected;
 
 		public override string? ToString() => Data?.ToString();
 	}
-	public record Row2(List<Column2> Columns)
+	public record Row(List<Column> Columns)
 	{
-		public Row2(params object[] values)
-			: this(values.Select(x => new Column2(x)).ToList())
+		public Row(params object[] values)
+			: this(values.Select(x => new Column(x)).ToList())
 		{
 		}
-		public IEnumerable<Column2> Selections => Columns.Where(x => x.IsSelected);
+		public IEnumerable<Column> Selections => Columns.Where(x => x.IsSelected);
 	}
 
-	public record Table(Dictionary<int, Header> Headers, MemoizedBuffer<Row2> Rows);
+	public record Table(Dictionary<int, Header> Headers, MemoizedBuffer<Row> Rows);
+
 	private IEnumerable<Row> Generate()
-	{
-		var i = 0;
-		while (true)
-		{
-			yield return new(i, Guid.NewGuid(), DateTime.Now.ToString("o"));
-			i++;
-		}
-	}
-
-	private IEnumerable<Row2> Generate2()
 	{
 		var i = 0;
 		while (true)
@@ -250,7 +220,7 @@ public class MainView : IView
 
 	private Table GenerateTable()
 	{
-		var rows = new MemoizedBuffer<Row2>(Generate2().GetEnumerator());
+		var rows = new MemoizedBuffer<Row>(Generate().GetEnumerator());
 		var headers = new[]
 		{
 			new Header("Idx"),
@@ -263,7 +233,6 @@ public class MainView : IView
 	}
 
 	private int _page = 1;
-	private MemoizedBuffer<Row> _rows;
 	private Table _table;
 	private bool _isSelection = false;
 	private string _generated = "";
