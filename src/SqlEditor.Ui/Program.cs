@@ -6,6 +6,7 @@ using System.Diagnostics;
 using System.Numerics;
 using System.Reflection;
 using System.Runtime.CompilerServices;
+using Microsoft.VisualBasic.CompilerServices;
 using Veldrid;
 using Veldrid.Sdl2;
 using Veldrid.StartupUtilities;
@@ -55,6 +56,126 @@ public interface IView
 	Task Render();
 }
 
+// ref: https://github.com/dotnet/reactive/blob/2305a5b0e58b41326e952ca91f004e7c3e5d0bff/Ix.NET/Source/System.Interactive/System/Linq/Operators/Memoize.cs#L114C30-L114C44
+public sealed class MemoizedBuffer<T> : IBuffer<T>
+{
+	public IList<T> Buffer => _buffer;
+
+	private readonly object _gate = new();
+	private readonly IList<T> _buffer;
+	private readonly IEnumerator<T> _source;
+
+	private bool _disposed;
+	private Exception? _error;
+	private bool _stopped;
+
+	public MemoizedBuffer(IEnumerator<T> source)
+	{
+		_source = source;
+		_buffer = new List<T>();
+	}
+
+	public IEnumerator<T> GetEnumerator()
+	{
+		if (_disposed)
+			throw new ObjectDisposedException("");
+
+		return GetEnumerator_();
+	}
+
+	IEnumerator IEnumerable.GetEnumerator()
+	{
+		if (_disposed)
+			throw new ObjectDisposedException("");
+
+		return GetEnumerator();
+	}
+
+	public void Dispose()
+	{
+		lock (_gate)
+		{
+			if (!_disposed)
+			{
+				_source.Dispose();
+				_buffer.Clear();
+			}
+
+			_disposed = true;
+		}
+	}
+
+	private IEnumerator<T> GetEnumerator_()
+	{
+		var i = 0;
+
+		try
+		{
+			while (true)
+			{
+				if (_disposed)
+					throw new ObjectDisposedException("");
+
+				var hasValue = default(bool);
+				var current = default(T)!;
+
+				lock (_gate)
+				{
+					if (i >= _buffer.Count)
+					{
+						if (!_stopped)
+						{
+							try
+							{
+								hasValue = _source.MoveNext();
+								if (hasValue)
+									current = _source.Current;
+							}
+							catch (Exception ex)
+							{
+								_stopped = true;
+								_error = ex;
+
+								_source.Dispose();
+							}
+						}
+
+						if (_stopped)
+						{
+							if (_error != null)
+								throw _error;
+							else
+								break;
+						}
+
+						if (hasValue)
+						{
+							_buffer.Add(current);
+						}
+					}
+					else
+					{
+						hasValue = true;
+					}
+				}
+
+				if (hasValue)
+					yield return _buffer[i];
+				else
+					break;
+
+				i++;
+			}
+		}
+		finally
+		{
+			//if (_buffer != null)
+			//	_buffer.Done(i + 1);
+		}
+	}
+}
+
+
 public class MainView : IView
 {
 	private bool _showDemoWindow = true;
@@ -65,11 +186,25 @@ public class MainView : IView
 		// - https://stackoverflow.com/questions/1537043/caching-ienumerable
 		// - https://stackoverflow.com/questions/12427097/is-there-an-ienumerable-implementation-that-only-iterates-over-its-source-e-g
 		// - https://stackoverflow.com/questions/58541336/thread-safe-cached-enumerator-lock-with-yield
-		_rows = Generate().Memoize();
+		// _rows = Generate().Memoize();
+		_rows = new MemoizedBuffer<Row>(Generate().GetEnumerator());
 	}
 
-	public record Row(int Idx, Guid Id, string Timestamp)
+	public record Column(object ObjectData)
 	{
+		public bool IsSelected;
+	}
+
+	public record Column<T>(T Data) : Column(Data)
+	{
+		public static implicit operator Column<T>(T data) => new(data);
+		public override string ToString() => Data.ToString();
+	}
+
+	public record Row(Column<int> Idx, Column<Guid> Id, Column<string> Timestamp)
+	{
+		public bool HasSelection => Idx.IsSelected || Id.IsSelected || Timestamp.IsSelected;
+		public List<Column> Columns => new() { Idx, Id, Timestamp };
 	}
 
 	private IEnumerable<Row> Generate()
@@ -83,7 +218,9 @@ public class MainView : IView
 	}
 
 	private int _page = 0;
-	private IEnumerable<Row> _rows;
+	private MemoizedBuffer<Row> _rows;
+	private bool _isSelection = false;
+	private string _generated = "";
 
 	public async Task Render()
 	{
@@ -100,6 +237,8 @@ public class MainView : IView
 				if (ImGui.BeginTabItem("Query"))
 				{
 					ImGui.SeparatorText("start of table");
+
+					ImGui.Checkbox("selection", ref _isSelection);
 
 					var outerSize = new Vector2(0, ImGui.GetTextLineHeightWithSpacing() * 8);
 					if (ImGui.BeginTable("items", 3, ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg
@@ -129,13 +268,13 @@ public class MainView : IView
 								ImGui.TableNextRow();
 
 								ImGui.TableNextColumn();
-								ImGui.Text(current.Idx.ToString());
+								RenderCell(current.Idx.ToString(), ref current.Idx.IsSelected);
 
 								ImGui.TableNextColumn();
-								ImGui.Text(current.Id.ToString());
+								RenderCell(current.Id.ToString(), ref current.Id.IsSelected);
 
 								ImGui.TableNextColumn();
-								ImGui.Text(current.Timestamp);
+								RenderCell(current.Timestamp.ToString(), ref current.Timestamp.IsSelected);
 							}
 						}
 
@@ -156,7 +295,19 @@ public class MainView : IView
 
 					ImGui.SeparatorText("end of table");
 
-					// todo: how to render large data in table?
+					{
+						if (ImGui.Button("Generate"))
+						{
+							_generated = string.Join(Environment.NewLine, _rows.Buffer.Where(x => x.HasSelection)
+								.Select(x =>
+								{
+									var selected = x.Columns.Where(y => y.IsSelected)
+										.Select(y => y.ToString());
+									return string.Join(", ", selected);
+								}));
+						}
+						ImGui.Text(_generated);
+					}
 
 					ImGui.EndTabItem();
 				}
@@ -170,6 +321,18 @@ public class MainView : IView
 		{
 			ImGui.SetNextWindowDockID(dockId, ImGuiCond.Appearing);
 			ImGui.ShowDemoWindow(ref _showDemoWindow);
+		}
+	}
+
+	private void RenderCell(string label, ref bool isSelected)
+	{
+		if (_isSelection)
+		{
+			ImGui.Selectable(label, ref isSelected);
+		}
+		else
+		{
+			ImGui.Text(label);
 		}
 	}
 }
