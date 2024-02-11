@@ -56,7 +56,12 @@ public interface IView
 	Task Render();
 }
 
-// ref: https://github.com/dotnet/reactive/blob/2305a5b0e58b41326e952ca91f004e7c3e5d0bff/Ix.NET/Source/System.Interactive/System/Linq/Operators/Memoize.cs#L114C30-L114C44
+// refs: 
+// - https://stackoverflow.com/questions/1537043/caching-ienumerable
+// - https://stackoverflow.com/questions/12427097/is-there-an-ienumerable-implementation-that-only-iterates-over-its-source-e-g
+// - https://stackoverflow.com/questions/58541336/thread-safe-cached-enumerator-lock-with-yield
+// code from: https://github.com/dotnet/reactive/blob/2305a5b0e58b41326e952ca91f004e7c3e5d0bff/Ix.NET/Source/System.Interactive/System/Linq/Operators/Memoize.cs#L114C30-L114C44
+// this exposes the internal cache buffer publicly
 public sealed class MemoizedBuffer<T> : IBuffer<T>
 {
 	public IList<T> Buffer => _buffer;
@@ -182,12 +187,9 @@ public class MainView : IView
 
 	public MainView()
 	{
-		// refs: 
-		// - https://stackoverflow.com/questions/1537043/caching-ienumerable
-		// - https://stackoverflow.com/questions/12427097/is-there-an-ienumerable-implementation-that-only-iterates-over-its-source-e-g
-		// - https://stackoverflow.com/questions/58541336/thread-safe-cached-enumerator-lock-with-yield
 		// _rows = Generate().Memoize();
 		_rows = new MemoizedBuffer<Row>(Generate().GetEnumerator());
+		_table = GenerateTable();
 	}
 
 	public record Column(object ObjectData)
@@ -207,6 +209,25 @@ public class MainView : IView
 		public List<Column> Columns => new() { Idx, Id, Timestamp };
 	}
 
+
+
+	public record Header(string Name);
+	public record Column2(object? Data)
+	{
+		public bool IsSelected;
+
+		public override string? ToString() => Data?.ToString();
+	}
+	public record Row2(List<Column2> Columns)
+	{
+		public Row2(params object[] values)
+			: this(values.Select(x => new Column2(x)).ToList())
+		{
+		}
+		public IEnumerable<Column2> Selections => Columns.Where(x => x.IsSelected);
+	}
+
+	public record Table(Dictionary<int, Header> Headers, MemoizedBuffer<Row2> Rows);
 	private IEnumerable<Row> Generate()
 	{
 		var i = 0;
@@ -217,8 +238,33 @@ public class MainView : IView
 		}
 	}
 
-	private int _page = 0;
+	private IEnumerable<Row2> Generate2()
+	{
+		var i = 0;
+		while (true)
+		{
+			yield return new(i, Guid.NewGuid(), DateTime.Now.ToString("o"));
+			i++;
+		}
+	}
+
+	private Table GenerateTable()
+	{
+		var rows = new MemoizedBuffer<Row2>(Generate2().GetEnumerator());
+		var headers = new[]
+		{
+			new Header("Idx"),
+			new Header("Guid"),
+			new Header("Timestamp"),
+		}.Select((x, i) => new { i, x })
+			.ToDictionary(x => x.i, x => x.x);
+
+		return new(headers, rows);
+	}
+
+	private int _page = 1;
 	private MemoizedBuffer<Row> _rows;
+	private Table _table;
 	private bool _isSelection = false;
 	private string _generated = "";
 
@@ -241,14 +287,15 @@ public class MainView : IView
 					ImGui.Checkbox("selection", ref _isSelection);
 
 					var outerSize = new Vector2(0, ImGui.GetTextLineHeightWithSpacing() * 8);
-					if (ImGui.BeginTable("items", 3, ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg
+					if (ImGui.BeginTable("items", _table.Headers.Count, ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg
 							| ImGuiTableFlags.Resizable
 							| ImGuiTableFlags.ScrollY, outerSize))
 					{
 						ImGui.TableSetupScrollFreeze(0, 1);
-						ImGui.TableSetupColumn("Idx");
-						ImGui.TableSetupColumn("Id");
-						ImGui.TableSetupColumn("Timestamp");
+						foreach (var header in _table.Headers.Values)
+						{
+							ImGui.TableSetupColumn(header.Name);
+						}
 						ImGui.TableHeadersRow();
 
 						ImGuiListClipperPtr ptr;
@@ -258,23 +305,21 @@ public class MainView : IView
 							ptr = new ImGuiListClipperPtr(&clipper);
 						}
 						ptr.Begin(1000);
+						var skip = 1000 * (_page - 1);
 
 						while (ptr.Step())
 						{
-							for (int row = ptr.DisplayStart; row < ptr.DisplayEnd; row++)
+							for (int row = ptr.DisplayStart + skip; row < ptr.DisplayEnd + skip; row++)
 							{
-								var current = _rows.ElementAt(row);
+								var current = _table.Rows.ElementAt(row);
 
 								ImGui.TableNextRow();
 
-								ImGui.TableNextColumn();
-								RenderCell(current.Idx.ToString(), ref current.Idx.IsSelected);
-
-								ImGui.TableNextColumn();
-								RenderCell(current.Id.ToString(), ref current.Id.IsSelected);
-
-								ImGui.TableNextColumn();
-								RenderCell(current.Timestamp.ToString(), ref current.Timestamp.IsSelected);
+								foreach (var column in current.Columns)
+								{
+									ImGui.TableNextColumn();
+									RenderCell(column.Data?.ToString() ?? "NULL", ref column.IsSelected);
+								}
 							}
 						}
 
@@ -282,7 +327,7 @@ public class MainView : IView
 
 						if (ImGui.Button("<"))
 						{
-							_page = Math.Min(0, _page - 1);
+							_page = Math.Max(1, _page - 1);
 						}
 						ImGui.SameLine();
 						if (ImGui.Button(">"))
@@ -298,10 +343,11 @@ public class MainView : IView
 					{
 						if (ImGui.Button("Generate"))
 						{
-							_generated = string.Join(Environment.NewLine, _rows.Buffer.Where(x => x.HasSelection)
+							_generated = string.Join(Environment.NewLine, _table.Rows.Buffer.Select(x => x.Selections.ToList())
+								.Where(x => x.Any())
 								.Select(x =>
 								{
-									var selected = x.Columns.Where(y => y.IsSelected)
+									var selected = x.Where(y => y.IsSelected)
 										.Select(y => y.ToString());
 									return string.Join(", ", selected);
 								}));
