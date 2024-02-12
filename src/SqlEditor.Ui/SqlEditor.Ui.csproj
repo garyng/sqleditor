@@ -21,17 +21,17 @@
 		<AllowUnsafeBlocks>true</AllowUnsafeBlocks>
 	</PropertyGroup>
 	<ItemGroup>
-		<!-- note: 
-			5.12.0 has a bug which will generate wrong version when running under a tag checkout on github action, 
-			see https://github.com/GitTools/GitVersion/issues/2838,
-			fix is in v6: https://github.com/GitTools/GitVersion/pull/3768 but wasn't usable,
-			revert back to 5.10.0 which still has the fix before it was reverted in https://github.com/GitTools/GitVersion/pull/3085.
-		-->
+		<PackageReference Include="GaryNg.ImGui.NET" Version="1.90.2.1" />
 		<PackageReference Include="GitVersion.MsBuild" Version="5.10.0">
+			<!-- note: 
+				5.12.0 has a bug which will generate wrong version when running under a tag checkout on github action, 
+				see https://github.com/GitTools/GitVersion/issues/2838,
+				fix is in v6: https://github.com/GitTools/GitVersion/pull/3768 but wasn't usable,
+				revert back to 5.10.0 which still has the fix before it was reverted in https://github.com/GitTools/GitVersion/pull/3085.
+			-->
 			<PrivateAssets>all</PrivateAssets>
 			<IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
 		</PackageReference>
-		<PackageReference Include="ImGui.NET" Version="1.90.0.1" />
 		<PackageReference Include="Microsoft.Extensions.Hosting" Version="6.0.1" />
 		<PackageReference Include="System.Interactive" Version="6.0.1" />
 		<PackageReference Include="Veldrid" Version="4.9.0" />

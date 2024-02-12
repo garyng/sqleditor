@@ -6,7 +6,6 @@ using System.Diagnostics;
 using System.Numerics;
 using System.Reflection;
 using System.Runtime.CompilerServices;
-using Microsoft.VisualBasic.CompilerServices;
 using Veldrid;
 using Veldrid.Sdl2;
 using Veldrid.StartupUtilities;
@@ -180,6 +179,89 @@ public sealed class MemoizedBuffer<T> : IBuffer<T>
 	}
 }
 
+public class RunningIndexEnumerator<T, U> : IEnumerable<T>
+	where T : RunningIndexEnumerator<T, U>.IAssignIndex
+{
+	public interface IAssignIndex
+	{
+		public record OnIndexAssignedParam(long Index, U Value);
+		public long AssignIndex(long startingIndex, Action<OnIndexAssignedParam> onIndexAssigned);
+	}
+	
+	private readonly IEnumerator<T> _source;
+	private readonly Action<IAssignIndex.OnIndexAssignedParam> _onIndexAssigned;
+
+	public RunningIndexEnumerator(IEnumerator<T> source, Action<IAssignIndex.OnIndexAssignedParam> onIndexAssigned)
+	{
+		_source = source;
+		_onIndexAssigned = onIndexAssigned;
+	}
+
+	public IEnumerator<T> GetEnumerator()
+	{
+		long index = 0;
+		while (_source.MoveNext())
+		{
+			var row = _source.Current;
+			index = row.AssignIndex(index, _onIndexAssigned);
+			yield return row;
+		}
+	}
+
+	IEnumerator IEnumerable.GetEnumerator()
+	{
+		return GetEnumerator();
+	}
+}
+
+public record Header(string Name);
+public record Column(object? Data)
+{
+	public long CellId;
+
+	public bool IsSelected;
+
+	public override string? ToString() => Data?.ToString();
+}
+public record Row(List<Column> Columns) : RunningIndexEnumerator<Row, Column>.IAssignIndex
+{
+	public Row(params object[] values)
+		: this(values.Select(x => new Column(x)).ToList())
+	{
+	}
+	public IEnumerable<Column> Selections => Columns.Where(x => x.IsSelected);
+
+	public long AssignIndex(long startingIndex, Action<RunningIndexEnumerator<Row, Column>.IAssignIndex.OnIndexAssignedParam> onIndexAssigned)
+	{
+		foreach (var column in Columns)
+		{
+			column.CellId = startingIndex;
+			onIndexAssigned(new(startingIndex, column));
+			startingIndex++;
+		}
+		return startingIndex;
+	}
+}
+
+public record Table(Dictionary<int, Header> Headers)
+{
+	public MemoizedBuffer<Row> Rows { get; }
+
+	public Dictionary<long, Column> ColumnByCellId { get; }
+
+	public Table(Dictionary<int, Header> headers,
+		IEnumerable<Row> rows) : this(headers)
+	{
+		ColumnByCellId = new();
+		Rows = new MemoizedBuffer<Row>(
+			new RunningIndexEnumerator<Row, Column>(rows.GetEnumerator(), assigned =>
+				{
+					ColumnByCellId[assigned.Index] = assigned.Value;
+				})
+				.GetEnumerator()
+		);
+	}
+}
 
 public class MainView : IView
 {
@@ -189,24 +271,6 @@ public class MainView : IView
 	{
 		_table = GenerateTable();
 	}
-
-	public record Header(string Name);
-	public record Column(object? Data)
-	{
-		public bool IsSelected;
-
-		public override string? ToString() => Data?.ToString();
-	}
-	public record Row(List<Column> Columns)
-	{
-		public Row(params object[] values)
-			: this(values.Select(x => new Column(x)).ToList())
-		{
-		}
-		public IEnumerable<Column> Selections => Columns.Where(x => x.IsSelected);
-	}
-
-	public record Table(Dictionary<int, Header> Headers, MemoizedBuffer<Row> Rows);
 
 	private IEnumerable<Row> Generate()
 	{
@@ -236,6 +300,92 @@ public class MainView : IView
 	private Table _table;
 	private bool _isSelection = false;
 	private string _generated = "";
+	
+	public abstract record SelectionState
+	{
+		public record HasRanges(Dictionary<long, bool> IsSelectedByIndex) : SelectionState
+		{
+			protected override SelectionState HandleRequest(ImGuiSelectionRequestPtr request)
+			{
+				if (request.Type == ImGuiSelectionRequestType.SetRange)
+				{
+					for (var x = request.RangeFirstItem; x <= request.RangeLastItem; x++)
+					{
+						IsSelectedByIndex[x] = request.RangeSelected;
+					}
+					return this;
+				}
+				return base.HandleRequest(request);
+			}
+
+			public override bool IsSelected(long index)
+			{
+				if (IsSelectedByIndex.TryGetValue(index, out var isSelected))
+				{
+					return isSelected;
+				}
+				return false;
+			}
+		}
+		public record None : SelectionState
+		{
+			public override bool IsSelected(long index)
+			{
+				return false;
+			}
+		}
+
+		public record All : SelectionState
+		{
+			public override bool IsSelected(long index)
+			{
+				return true;
+			}
+		}
+
+		protected virtual SelectionState HandleRequest(ImGuiSelectionRequestPtr request)
+		{
+			switch (request.Type)
+			{
+				case ImGuiSelectionRequestType.None:
+					break;
+				case ImGuiSelectionRequestType.Clear:
+					return new None();
+				case ImGuiSelectionRequestType.SelectAll:
+					return new All();
+				case ImGuiSelectionRequestType.SetRange:
+				{
+					var hasRanges = new HasRanges(new());
+					for (var x = request.RangeFirstItem; x <= request.RangeLastItem; x++)
+					{
+						hasRanges.IsSelectedByIndex[x] = request.RangeSelected;
+					}
+
+					return hasRanges;
+				}
+				default:
+					throw new ArgumentOutOfRangeException();
+			}
+
+			return this;
+		}
+
+		public SelectionState HandleRequests(ImGuiMultiSelectIOPtr io)
+		{
+			var finalState = this;
+			for (int i = 0; i < io.Requests.Size; i++)
+			{
+				var current = io.Requests[i];
+				finalState = finalState.HandleRequest(current);
+			}
+
+			return finalState;
+		}
+
+		public abstract bool IsSelected(long index);
+	}
+
+	private SelectionState _selectionState = new SelectionState.None();
 
 	public async Task Render()
 	{
@@ -253,60 +403,74 @@ public class MainView : IView
 				{
 					ImGui.SeparatorText("start of table");
 
-					ImGui.Checkbox("selection", ref _isSelection);
-
-					var outerSize = new Vector2(0, ImGui.GetTextLineHeightWithSpacing() * 8);
-					if (ImGui.BeginTable("items", _table.Headers.Count, ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg
-							| ImGuiTableFlags.Resizable
-							| ImGuiTableFlags.ScrollY, outerSize))
 					{
-						ImGui.TableSetupScrollFreeze(0, 1);
-						foreach (var header in _table.Headers.Values)
-						{
-							ImGui.TableSetupColumn(header.Name);
-						}
-						ImGui.TableHeadersRow();
+						ImGui.Checkbox("selection", ref _isSelection);
 
-						ImGuiListClipperPtr ptr;
-						unsafe
-						{
-							var clipper = new ImGuiListClipper();
-							ptr = new ImGuiListClipperPtr(&clipper);
-						}
-						ptr.Begin(1000);
-						var skip = 1000 * (_page - 1);
+						var msIo = ImGui.BeginMultiSelect(ImGuiMultiSelectFlags.BoxSelect);
+						_selectionState = _selectionState.HandleRequests(msIo);
 
-						while (ptr.Step())
+						var outerSize = new Vector2(0, ImGui.GetTextLineHeightWithSpacing() * 8);
+						if (ImGui.BeginTable("items", _table.Headers.Count, ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg
+								| ImGuiTableFlags.Resizable
+								| ImGuiTableFlags.ScrollY, outerSize))
 						{
-							for (int row = ptr.DisplayStart + skip; row < ptr.DisplayEnd + skip; row++)
+							ImGui.TableSetupScrollFreeze(0, 1);
+							foreach (var header in _table.Headers.Values)
 							{
-								var current = _table.Rows.ElementAt(row);
+								ImGui.TableSetupColumn(header.Name);
+							}
+							ImGui.TableHeadersRow();
 
-								ImGui.TableNextRow();
+							ImGuiListClipperPtr ptr;
+							unsafe
+							{
+								var clipper = new ImGuiListClipper();
+								ptr = new ImGuiListClipperPtr(&clipper);
+							}
+							ptr.Begin(1000);
+							var skip = 1000 * (_page - 1);
 
-								foreach (var column in current.Columns)
+							if (msIo.RangeSrcItem > 0)
+							{
+								ptr.IncludeItemByIndex((int)msIo.RangeSrcItem);
+							}
+
+							while (ptr.Step())
+							{
+								for (int row = ptr.DisplayStart + skip; row < ptr.DisplayEnd + skip; row++)
 								{
-									ImGui.TableNextColumn();
-									RenderCell(column.Data?.ToString() ?? "NULL", ref column.IsSelected);
+									var current = _table.Rows.ElementAt(row);
+
+									ImGui.TableNextRow();
+
+									foreach (var column in current.Columns)
+									{
+										ImGui.TableNextColumn();
+										ImGui.SetNextItemSelectionUserData(column.CellId);
+										var isSelected = _selectionState.IsSelected(column.CellId);
+										ImGui.Selectable(column.Data?.ToString() ?? "NULL", isSelected);
+									}
 								}
 							}
+
+							ImGui.EndTable();
+
+							if (ImGui.Button("<"))
+							{
+								_page = Math.Max(1, _page - 1);
+							}
+							ImGui.SameLine();
+							if (ImGui.Button(">"))
+							{
+								_page++;
+							}
+							ImGui.SameLine();
+							ImGui.Text($"{_page}");
 						}
 
-						ImGui.EndTable();
-
-						if (ImGui.Button("<"))
-						{
-							_page = Math.Max(1, _page - 1);
-						}
-						ImGui.SameLine();
-						if (ImGui.Button(">"))
-						{
-							_page++;
-						}
-						ImGui.SameLine();
-						ImGui.Text($"{_page}");
+						msIo = ImGui.EndMultiSelect();
+						_selectionState = _selectionState.HandleRequests(msIo);
 					}
-
 					ImGui.SeparatorText("end of table");
 
 					{
@@ -336,18 +500,6 @@ public class MainView : IView
 		{
 			ImGui.SetNextWindowDockID(dockId, ImGuiCond.Appearing);
 			ImGui.ShowDemoWindow(ref _showDemoWindow);
-		}
-	}
-
-	private void RenderCell(string label, ref bool isSelected)
-	{
-		if (_isSelection)
-		{
-			ImGui.Selectable(label, ref isSelected);
-		}
-		else
-		{
-			ImGui.Text(label);
 		}
 	}
 }
