@@ -298,7 +298,6 @@ public class MainView : IView
 
 	private int _page = 1;
 	private Table _table;
-	private bool _isSelection = false;
 	private string _generated = "";
 	
 	public abstract record SelectionState
@@ -404,15 +403,17 @@ public class MainView : IView
 					ImGui.SeparatorText("start of table");
 
 					{
-						ImGui.Checkbox("selection", ref _isSelection);
+						// multiselect doesn't work with ImGuiTableFlags.ScrollY,
+						// so we create a child manually
+						var outerSize = new Vector2(0, ImGui.GetTextLineHeightWithSpacing() * 8);
+						ImGui.BeginChild("items child", outerSize);
 
+						// this must be after BeginChild otherwise BoxSelect wont work
 						var msIo = ImGui.BeginMultiSelect(ImGuiMultiSelectFlags.BoxSelect);
 						_selectionState = _selectionState.HandleRequests(msIo);
 
-						var outerSize = new Vector2(0, ImGui.GetTextLineHeightWithSpacing() * 8);
 						if (ImGui.BeginTable("items", _table.Headers.Count, ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg
-								| ImGuiTableFlags.Resizable
-								| ImGuiTableFlags.ScrollY, outerSize))
+								| ImGuiTableFlags.Resizable))
 						{
 							ImGui.TableSetupScrollFreeze(0, 1);
 							foreach (var header in _table.Headers.Values)
@@ -454,23 +455,26 @@ public class MainView : IView
 							}
 
 							ImGui.EndTable();
-
-							if (ImGui.Button("<"))
-							{
-								_page = Math.Max(1, _page - 1);
-							}
-							ImGui.SameLine();
-							if (ImGui.Button(">"))
-							{
-								_page++;
-							}
-							ImGui.SameLine();
-							ImGui.Text($"{_page}");
 						}
 
 						msIo = ImGui.EndMultiSelect();
 						_selectionState = _selectionState.HandleRequests(msIo);
+
+						ImGui.EndChild();
+
+						if (ImGui.Button("<"))
+						{
+							_page = Math.Max(1, _page - 1);
+						}
+						ImGui.SameLine();
+						if (ImGui.Button(">"))
+						{
+							_page++;
+						}
+						ImGui.SameLine();
+						ImGui.Text($"{_page}");
 					}
+
 					ImGui.SeparatorText("end of table");
 
 					{
