@@ -3,13 +3,13 @@ using System.Collections;
 
 namespace SqlEditor.Tests
 {
-	public interface IAssignIndex
+	public class RunningIndexEnumeratorTests
 	{
-		public long AssignIndex(long startingIndex);
-	}
+		public interface IAssignIndex
+		{
+			public long AssignIndex(long startingIndex);
+		}
 
-	public class TableTests
-	{
 		public record Row1(List<Col1> Cols) : IAssignIndex
 		{
 			public long AssignIndex(long startingIndex)
