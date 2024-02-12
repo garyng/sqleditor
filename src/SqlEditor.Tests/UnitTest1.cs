@@ -176,25 +176,28 @@ public class Playground2
 			from [dbo].[Table]
 			where Id = 4
 			""");
-
-		// todo: get header row
-		// todo: get data row
-		// todo: get header row even when there is no results
 	}
 
 	public record Schema(string ColumnName, Type DataType, bool AllowDBNull, Type ProviderSpecificDataType);
 
-	[Test]
-	public async Task GetSchemaAndData()
+	//[TestCase("""
+	//  select *
+	//  from [dbo].[Table]
+	//  where Id = 999
+	//  """)]
+	// multiple tables with same column names
+	[TestCase("""
+	  select *
+	  from [dbo].[Table] t
+	  	join [dbo].[Table1] t1 on t.Id = t1.Id
+	  """)]
+	public async Task GetSchemaAndData(string sql)
 	{
-		await using var reader = await _connection.ExecuteReaderAsync(
-			"""
-			select *
-			from [dbo].[Table]
-			""");
-
+		await using var reader = await _connection.ExecuteReaderAsync(sql);
+		// todo: what about those with joins and has multiple column with the same name?
 		// SQL-CLR type mapping: https://learn.microsoft.com/en-us/dotnet/framework/data/adonet/sql/linq/sql-clr-type-mapping
-		var schema = (await reader.GetSchemaTableAsync())
+		var schemaTable = await reader.GetSchemaTableAsync();
+		var schema = schemaTable
 			.AsEnumerable()
 			.Select(x => new Schema(
 				x.Field<string>(nameof(Schema.ColumnName))!,
@@ -202,6 +205,10 @@ public class Playground2
 				x.Field<bool>(nameof(Schema.AllowDBNull)),
 				x.Field<Type>(nameof(Schema.ProviderSpecificDataType))!
 			));
+
+		schema.Should()
+			.NotBeEmpty();
+
 		var parser = reader.GetRowParser<dynamic>();
 		
 		async IAsyncEnumerable<IDictionary<string, object>> ReadAll()
@@ -214,7 +221,9 @@ public class Playground2
 
 		var data = await ReadAll().ToListAsync();
 		data.Should()
-			.NotBeEmpty();
+			.BeEmpty();
+
+		// note: this seems to work properly
 	}
 }
 
