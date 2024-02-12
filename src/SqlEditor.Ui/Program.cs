@@ -3,6 +3,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using System.Collections;
 using System.Numerics;
+using System.Text;
 using SqlEditor.Ui.ImGuiNet;
 using Veldrid;
 using Veldrid.StartupUtilities;
@@ -212,17 +213,21 @@ public class RunningIndexEnumerator<T, U> : IEnumerable<T>
 	}
 }
 
-public record Header(string Name);
+public record Header(int Idx, string Name);
 public record Column(object? Data)
 {
-	public long CellIdx;
+	public long CellIdx { get; set; }
+	public int HeaderIdx { get; set; }
 
 	public override string? ToString() => Data?.ToString();
 }
 public record Row(List<Column> Columns) : RunningIndexEnumerator<Row, Column>.IAssignIndex
 {
 	public Row(params object[] values)
-		: this(values.Select(x => new Column(x)).ToList())
+		: this(values.Select((x, i) => new Column(x)
+		{
+			HeaderIdx = i
+		}).ToList())
 	{
 	}
 
@@ -243,6 +248,7 @@ public record Table(Dictionary<int, Header> Headers)
 	public MemoizedBuffer<Row> Rows { get; }
 	public IList<Row> RowsBuffered => Rows.Buffer;
 
+	// todo: maybe remove this if not used
 	public Dictionary<long, Column> ColumnByCellIdx { get; }
 
 	public Table(Dictionary<int, Header> headers,
@@ -258,21 +264,25 @@ public record Table(Dictionary<int, Header> Headers)
 		);
 	}
 
-	public IEnumerable<(Row row, List<Column> selectedColumns)> Selections(SelectionState selectionState)
+	public IEnumerable<(Row row, List<(Header header, Column column)> selectedColumns)> Selections(SelectionState selectionState)
 	{
 		return selectionState switch
 		{
-			SelectionState.All => RowsBuffered.Select(x => (x, x.Columns)),
+			SelectionState.All => RowsBuffered.Select(x => (x, GetColumnsHeaders(x.Columns))),
 			SelectionState.HasRanges hasRanges => RowsBuffered
 				.Select(row => (
 					row,
-					cols: row.Columns.Where(x => hasRanges.IsSelected(x.CellIdx)).ToList()))
+					cols: GetColumnsHeaders(row.Columns
+						.Where(x => hasRanges.IsSelected(x.CellIdx)))))
 				.Where(x => x.cols.Any())
 				.ToList(),
-			SelectionState.None => Array.Empty<(Row row, List<Column> selectedColumns)>(),
+			SelectionState.None => Array.Empty<(Row, List<(Header, Column)>)>(),
 			_ => throw new ArgumentOutOfRangeException(nameof(selectionState))
 		};
 	}
+
+	private (Header header, Column column) GetColumnHeader(Column column) => (Headers[column.HeaderIdx], column);
+	private List<(Header header, Column column)> GetColumnsHeaders(IEnumerable<Column> columns) => columns.Select(GetColumnHeader).ToList();
 }
 
 public class MainView : IView
@@ -299,11 +309,10 @@ public class MainView : IView
 		var rows = new MemoizedBuffer<Row>(Generate().GetEnumerator());
 		var headers = new[]
 		{
-			new Header("Idx"),
-			new Header("Guid"),
-			new Header("Timestamp"),
-		}.Select((x, i) => new { i, x })
-			.ToDictionary(x => x.i, x => x.x);
+			new Header(0, "Idx"),
+			new Header(1, "Guid"),
+			new Header(2, "Timestamp"),
+		}.ToDictionary(x => x.Idx, x => x);
 
 		return new(headers, rows);
 	}
@@ -493,7 +502,12 @@ public class MainView : IView
 						if (ImGui.Button("Generate"))
 						{
 							_generated = string.Join(Environment.NewLine, _table.Selections(_selectionState)
-								.Select(x => string.Join(", ", x.selectedColumns)));
+								.Select(x =>
+								{
+									var header = string.Join(", ", x.selectedColumns.Select(x => x.header.Name));
+									var values = string.Join(", ", x.selectedColumns.Select(x => x.column));
+									return $"{header}; {values}";
+								}));
 						}
 						ImGui.Text(_generated);
 					}
