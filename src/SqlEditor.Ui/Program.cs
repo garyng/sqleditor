@@ -215,9 +215,7 @@ public class RunningIndexEnumerator<T, U> : IEnumerable<T>
 public record Header(string Name);
 public record Column(object? Data)
 {
-	public long CellId;
-
-	public bool IsSelected;
+	public long CellIdx;
 
 	public override string? ToString() => Data?.ToString();
 }
@@ -227,13 +225,12 @@ public record Row(List<Column> Columns) : RunningIndexEnumerator<Row, Column>.IA
 		: this(values.Select(x => new Column(x)).ToList())
 	{
 	}
-	public IEnumerable<Column> Selections => Columns.Where(x => x.IsSelected);
 
 	public long AssignIndex(long startingIndex, Action<RunningIndexEnumerator<Row, Column>.IAssignIndex.OnIndexAssignedParam> onIndexAssigned)
 	{
 		foreach (var column in Columns)
 		{
-			column.CellId = startingIndex;
+			column.CellIdx = startingIndex;
 			onIndexAssigned(new(startingIndex, column));
 			startingIndex++;
 		}
@@ -244,20 +241,37 @@ public record Row(List<Column> Columns) : RunningIndexEnumerator<Row, Column>.IA
 public record Table(Dictionary<int, Header> Headers)
 {
 	public MemoizedBuffer<Row> Rows { get; }
+	public IList<Row> RowsBuffered => Rows.Buffer;
 
-	public Dictionary<long, Column> ColumnByCellId { get; }
+	public Dictionary<long, Column> ColumnByCellIdx { get; }
 
 	public Table(Dictionary<int, Header> headers,
 		IEnumerable<Row> rows) : this(headers)
 	{
-		ColumnByCellId = new();
+		ColumnByCellIdx = new();
 		Rows = new MemoizedBuffer<Row>(
 			new RunningIndexEnumerator<Row, Column>(rows.GetEnumerator(), assigned =>
 				{
-					ColumnByCellId[assigned.Index] = assigned.Value;
+					ColumnByCellIdx[assigned.Index] = assigned.Value;
 				})
 				.GetEnumerator()
 		);
+	}
+
+	public IEnumerable<(Row row, List<Column> selectedColumns)> Selections(SelectionState selectionState)
+	{
+		return selectionState switch
+		{
+			SelectionState.All => RowsBuffered.Select(x => (x, x.Columns)),
+			SelectionState.HasRanges hasRanges => RowsBuffered
+				.Select(row => (
+					row,
+					cols: row.Columns.Where(x => hasRanges.IsSelected(x.CellIdx)).ToList()))
+				.Where(x => x.cols.Any())
+				.ToList(),
+			SelectionState.None => Array.Empty<(Row row, List<Column> selectedColumns)>(),
+			_ => throw new ArgumentOutOfRangeException(nameof(selectionState))
+		};
 	}
 }
 
@@ -445,8 +459,8 @@ public class MainView : IView
 									foreach (var column in current.Columns)
 									{
 										ImGui.TableNextColumn();
-										ImGui.SetNextItemSelectionUserData(column.CellId);
-										var isSelected = _selectionState.IsSelected(column.CellId);
+										ImGui.SetNextItemSelectionUserData(column.CellIdx);
+										var isSelected = _selectionState.IsSelected(column.CellIdx);
 										ImGui.Selectable(column.Data?.ToString() ?? "NULL", isSelected);
 									}
 								}
@@ -478,14 +492,8 @@ public class MainView : IView
 					{
 						if (ImGui.Button("Generate"))
 						{
-							_generated = string.Join(Environment.NewLine, _table.Rows.Buffer.Select(x => x.Selections.ToList())
-								.Where(x => x.Any())
-								.Select(x =>
-								{
-									var selected = x.Where(y => y.IsSelected)
-										.Select(y => y.ToString());
-									return string.Join(", ", selected);
-								}));
+							_generated = string.Join(Environment.NewLine, _table.Selections(_selectionState)
+								.Select(x => string.Join(", ", x.selectedColumns)));
 						}
 						ImGui.Text(_generated);
 					}
