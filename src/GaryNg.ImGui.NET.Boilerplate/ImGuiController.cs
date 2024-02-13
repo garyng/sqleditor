@@ -4,7 +4,7 @@ using System.Runtime.CompilerServices;
 using ImGuiNET;
 using Veldrid;
 
-namespace SqlEditor.Ui.ImGuiNet;
+namespace GaryNg.ImGui.NET.Boilerplate;
 
 /// <summary>
 /// A modified version of Veldrid.ImGui's ImGuiRenderer.
@@ -56,8 +56,8 @@ public class ImGuiController : IDisposable
         _windowWidth = width;
         _windowHeight = height;
 
-        ImGui.CreateContext();
-        var io = ImGui.GetIO();
+        ImGuiNET.ImGui.CreateContext();
+        var io = ImGuiNET.ImGui.GetIO();
         io.BackendFlags |= ImGuiBackendFlags.RendererHasVtxOffset;
         io.ConfigFlags |= ImGuiConfigFlags.NavEnableKeyboard |
                           ImGuiConfigFlags.DockingEnable;
@@ -65,7 +65,7 @@ public class ImGuiController : IDisposable
         configureIo(io);
         CreateDeviceResources(gd, outputDescription);
         SetPerFrameImGuiData(1f / 60f);
-        ImGui.NewFrame();
+        ImGuiNET.ImGui.NewFrame();
         _frameBegun = true;
     }
 
@@ -243,7 +243,7 @@ public class ImGuiController : IDisposable
     /// </summary>
     public void RecreateFontDeviceTexture(GraphicsDevice gd)
     {
-        ImGuiIOPtr io = ImGui.GetIO();
+        ImGuiIOPtr io = ImGuiNET.ImGui.GetIO();
         // Build
         IntPtr pixels;
         int width, height, bytesPerPixel;
@@ -287,8 +287,8 @@ public class ImGuiController : IDisposable
         if (_frameBegun)
         {
             _frameBegun = false;
-            ImGui.Render();
-            RenderImDrawData(ImGui.GetDrawData(), gd, cl);
+            ImGuiNET.ImGui.Render();
+            RenderImDrawData(ImGuiNET.ImGui.GetDrawData(), gd, cl);
         }
     }
 
@@ -299,14 +299,14 @@ public class ImGuiController : IDisposable
     {
         if (_frameBegun)
         {
-            ImGui.Render();
+            ImGuiNET.ImGui.Render();
         }
 
         SetPerFrameImGuiData(deltaSeconds);
         UpdateImGuiInput(snapshot);
 
         _frameBegun = true;
-        ImGui.NewFrame();
+        ImGuiNET.ImGui.NewFrame();
     }
 
     /// <summary>
@@ -315,7 +315,7 @@ public class ImGuiController : IDisposable
     /// </summary>
     private void SetPerFrameImGuiData(float deltaSeconds)
     {
-        ImGuiIOPtr io = ImGui.GetIO();
+        ImGuiIOPtr io = ImGuiNET.ImGui.GetIO();
         io.DisplaySize = new Vector2(
             _windowWidth / _scaleFactor.X,
             _windowHeight / _scaleFactor.Y);
@@ -387,7 +387,7 @@ public class ImGuiController : IDisposable
 
     private void UpdateImGuiInput(InputSnapshot snapshot)
     {
-        ImGuiIOPtr io = ImGui.GetIO();
+        ImGuiIOPtr io = ImGuiNET.ImGui.GetIO();
         io.AddMousePosEvent(snapshot.MousePosition.X, snapshot.MousePosition.Y);
         io.AddMouseButtonEvent(0, snapshot.IsMouseDown(MouseButton.Left));
         io.AddMouseButtonEvent(1, snapshot.IsMouseDown(MouseButton.Right));
@@ -455,7 +455,7 @@ public class ImGuiController : IDisposable
         }
 
         // Setup orthographic projection matrix into our constant buffer
-        ImGuiIOPtr io = ImGui.GetIO();
+        ImGuiIOPtr io = ImGuiNET.ImGui.GetIO();
         Matrix4x4 mvp = Matrix4x4.CreateOrthographicOffCenter(
             0f,
             io.DisplaySize.X,
