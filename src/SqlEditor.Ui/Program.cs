@@ -1,24 +1,12 @@
-﻿using ImGuiNET;
+﻿using GaryNg.ImGui.NET.Boilerplate;
+using ImGuiNET;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using System.Collections;
 using System.Numerics;
-using System.Text;
-using SqlEditor.Ui.ImGuiNet;
-using Veldrid;
-using Veldrid.StartupUtilities;
 using static SqlEditor.Ui.MainView;
 
 namespace SqlEditor.Ui;
-
-public record FontInfo(string TtfPath, float Size);
-
-public record ImGuiHostWindowOptions(
-	WindowCreateInfo WindowCreateInfo,
-	Vector4 ClearColor,
-	FontInfo? FontInfo,
-	Func<double, Task> Render
-);
 
 public class Program
 {
@@ -27,23 +15,23 @@ public class Program
 		var host = Host.CreateDefaultBuilder(args)
 			.ConfigureServices(s =>
 			{
+				s.AddImGuiNET((o, p) =>
+				{
+					o.WindowTitle = "sqleditor";
+					var mainView = p.GetRequiredService<MainView>();
+					o.RenderFunc = _ => mainView.Render();
+				});
 				s.AddSingleton<MainView>();
 			})
 			.Build();
 
 		var lifetime = host.Services.GetRequiredService<IHostApplicationLifetime>();
-		var mainView = host.Services.GetRequiredService<MainView>();
 
 		await host.StartAsync();
 
-		using var window = new ImGuiHostWindow(new ImGuiHostWindowOptions(
-			new WindowCreateInfo(50, 50, 1280, 720, WindowState.Normal, "sqleditor"),
-			new Vector4(0.45f, 0.55f, 0.6f, 1f),
-			null, // File.Exists(config.FontTtfPath) ? new(config.FontTtfPath, config.FontSize) : null
-			_ => mainView.Render()
-		));
+		using var imgui = host.Services.GetRequiredService<IImGuiHostWindow>();
 
-		await window.Run(lifetime.ApplicationStopping);
+		await imgui.Run(lifetime.ApplicationStopping);
 
 		await host.StopAsync();
 	}

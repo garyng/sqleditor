@@ -1,12 +1,49 @@
 ﻿using System.Diagnostics;
+using System.Numerics;
 using ImGuiNET;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Veldrid;
 using Veldrid.Sdl2;
 using Veldrid.StartupUtilities;
 
-namespace SqlEditor.Ui.ImGuiNet;
+namespace GaryNg.ImGui.NET.Boilerplate;
 
-public class ImGuiHostWindow : IDisposable
+public static class ImGuiServiceExtensions
+{
+    public static IServiceCollection AddImGuiNET(this IServiceCollection services, Action<ImGuiHostWindowOptions, IServiceProvider>? configure = null)
+    {
+        services.TryAddSingleton<IImGuiHostWindow>(provider =>
+        {
+            var options = new ImGuiHostWindowOptions();
+            configure?.Invoke(options, provider);
+            var window = new ImGuiHostWindow(options);
+            return window;
+        });
+        return services;
+    }
+}
+
+public class ImGuiHostWindowOptions
+{
+    public int X { get; set; } = 50;
+    public int Y { get; set; } = 50;
+    public int WindowWidth { get; set; } = 1280;
+    public int WindowHeight { get; set; } = 720;
+    public WindowState WindowInitialState { get; set; } = WindowState.Normal;
+    public string WindowTitle { get; set; } = "GaryNg.ImGui.NET.Boilerplate";
+    public WindowCreateInfo WindowCreateInfo => new(X, Y, WindowWidth, WindowHeight, WindowInitialState, WindowTitle);
+    public Vector4 ClearColor { get; set; } = new(0.45f, 0.55f, 0.6f, 1f);
+    public Func<double, Task> RenderFunc { get; set; } = _ => Task.CompletedTask;
+    public Action<ImGuiIOPtr> ConfigureIo { get; set; } = _ => { };
+}
+
+public interface IImGuiHostWindow : IDisposable
+{
+    Task Run(CancellationToken token = default);
+}
+
+public class ImGuiHostWindow : IImGuiHostWindow
 {
     // ref: https://github.com/ImGuiNET/ImGui.NET/blob/f04c11e97b82bfe485fca4f799f46fe7ddcf1813/src/ImGui.NET.SampleProgram/Program.cs
 
@@ -14,15 +51,13 @@ public class ImGuiHostWindow : IDisposable
     private readonly GraphicsDevice _gd;
     private readonly CommandList _cl;
     private readonly ImGuiController _controller;
-    private readonly ImGuiHostWindowOptions _options;
     private readonly RgbaFloat _clearColor;
     private readonly Func<double, Task> _render;
 
     public ImGuiHostWindow(ImGuiHostWindowOptions options)
     {
-        _options = options;
         _clearColor = new RgbaFloat(options.ClearColor.X, options.ClearColor.Y, options.ClearColor.Z, 1f);
-        _render = options.Render;
+        _render = options.RenderFunc;
 
         VeldridStartup.CreateWindowAndGraphicsDevice(
             options.WindowCreateInfo,
@@ -35,16 +70,7 @@ public class ImGuiHostWindow : IDisposable
             _controller.WindowResized(_window.Width, _window.Height);
         };
         _cl = _gd.ResourceFactory.CreateCommandList();
-        _controller = new ImGuiController(_gd, _gd.MainSwapchain.Framebuffer.OutputDescription, _window.Width, _window.Height, io =>
-        {
-            AddTtfFont(io, options.FontInfo);
-        });
-    }
-
-    private void AddTtfFont(ImGuiIOPtr io, FontInfo? fontInfo)
-    {
-        if (fontInfo == null) return;
-        io.Fonts.AddFontFromFileTTF(fontInfo.TtfPath, fontInfo.Size);
+        _controller = new ImGuiController(_gd, _gd.MainSwapchain.Framebuffer.OutputDescription, _window.Width, _window.Height, options.ConfigureIo);
     }
 
     public async Task Run(CancellationToken token = default)
